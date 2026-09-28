@@ -3,25 +3,30 @@ import time
 from pathlib import Path
 
 import requests
+
+
+
+
 BOT_TOKEN = "8631752643:AAHiI0W_wHqABteDpCWjFvGL06w5TC4ElE8"
 CHAT_ID = "@kanda_factory_1n"
 
-# =========================
-# CONFIG
-# =========================
 
-BOT_TOKEN = "YOUR_NEW_BOT_TOKEN"
-CHAT_ID = "@your_channel_or_group"
 
 ROOT_FOLDER = Path("erome_videos")
 
-BATCH_SIZE = 10
+# Telegram media group max = 10
+BATCH_SIZE = 100
+
+# Delay between albums
 DELAY_BETWEEN_GROUPS = 2
 
+# Delay between folders
+DELAY_BETWEEN_FOLDERS = 3
 
-# =========================
-# SUPPORTED FILES
-# =========================
+
+# ==========================================
+# SUPPORTED FILE TYPES
+# ==========================================
 
 IMAGE_EXTENSIONS = {
     ".jpg",
@@ -36,36 +41,11 @@ VIDEO_EXTENSIONS = {
 }
 
 
-# =========================
-# FIND ALL MEDIA
-# =========================
-
-def get_all_media():
-
-    media_files = []
-
-    # recursively find everything inside folder1
-    for path in ROOT_FOLDER.rglob("*"):
-
-        if not path.is_file():
-            continue
-
-        extension = path.suffix.lower()
-
-        if extension in IMAGE_EXTENSIONS or extension in VIDEO_EXTENSIONS:
-            media_files.append(path)
-
-    # sort by path so folder order stays predictable
-    media_files.sort(key=lambda x: str(x).lower())
-
-    return media_files
-
-
-# =========================
+# ==========================================
 # SEND MEDIA GROUP
-# =========================
+# ==========================================
 
-def send_media_group(media_files):
+def send_media_group(media_files, folder_name):
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup"
 
@@ -84,30 +64,44 @@ def send_media_group(media_files):
 
             extension = file_path.suffix.lower()
 
-            # Determine Telegram media type
+            # --------------------------
+            # IMAGE
+            # --------------------------
+
             if extension in IMAGE_EXTENSIONS:
+
                 media_type = "photo"
-                mime_type = "image/jpeg"
 
                 if extension == ".png":
                     mime_type = "image/png"
+
                 elif extension == ".webp":
                     mime_type = "image/webp"
 
+                else:
+                    mime_type = "image/jpeg"
+
+            # --------------------------
+            # VIDEO
+            # --------------------------
+
             else:
+
                 media_type = "video"
                 mime_type = "video/mp4"
 
-            # Filename without extension as caption
-            caption = file_path.stem
+            # --------------------------------
+            # FOLDER NAME AS CAPTION
+            # --------------------------------
 
             media_item = {
                 "type": media_type,
                 "media": f"attach://{field_name}",
-                "caption": caption
+                "caption": folder_name
             }
 
             if media_type == "video":
+
                 media_item["supports_streaming"] = True
 
             media.append(media_item)
@@ -118,16 +112,20 @@ def send_media_group(media_files):
                 mime_type
             )
 
+        # --------------------------------
+        # REQUEST
+        # --------------------------------
+
         data = {
             "chat_id": CHAT_ID,
             "media": json.dumps(media)
         }
 
         print()
-        print("Sending:")
-        
+        print(f"📤 Sending folder: {folder_name}")
+
         for file_path in media_files:
-            print("  →", file_path)
+            print("   →", file_path.name)
 
         response = requests.post(
             url,
@@ -139,7 +137,88 @@ def send_media_group(media_files):
         result = response.json()
 
         if result.get("ok"):
-            print("✅ Media group sent successfully")
+
+            print(f"✅ Folder sent: {folder_name}")
+
+            return True
+
+        else:
+
+            print("❌ Telegram error:")
+            print(result)
+
+            return False
+
+    except Exception as e:
+
+        print("❌ Error:", e)
+
+        return False
+
+    finally:
+
+        for file_handle in opened_files:
+
+            file_handle.close()
+
+
+# ==========================================
+# SEND SINGLE MEDIA
+# ==========================================
+
+def send_single_media(file_path, folder_name):
+
+    extension = file_path.suffix.lower()
+
+    if extension in IMAGE_EXTENSIONS:
+
+        endpoint = "sendPhoto"
+
+        if extension == ".png":
+            mime_type = "image/png"
+
+        elif extension == ".webp":
+            mime_type = "image/webp"
+
+        else:
+            mime_type = "image/jpeg"
+
+        field_name = "photo"
+
+    else:
+
+        endpoint = "sendVideo"
+        mime_type = "video/mp4"
+        field_name = "video"
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{endpoint}"
+
+    try:
+
+        with open(file_path, "rb") as file:
+
+            response = requests.post(
+                url,
+                data={
+                    "chat_id": CHAT_ID,
+                    "caption": folder_name
+                },
+                files={
+                    field_name: (
+                        file_path.name,
+                        file,
+                        mime_type
+                    )
+                },
+                timeout=1800
+            )
+
+        result = response.json()
+
+        if result.get("ok"):
+
+            print(f"✅ Sent: {file_path.name}")
+
             return True
 
         print("❌ Telegram error:")
@@ -150,79 +229,182 @@ def send_media_group(media_files):
     except Exception as e:
 
         print("❌ Error:", e)
+
         return False
 
-    finally:
 
-        for file_handle in opened_files:
-            file_handle.close()
+# ==========================================
+# GET MEDIA FROM ONE FOLDER
+# ==========================================
+
+def get_folder_media(folder):
+
+    media = []
+
+    for file_path in folder.iterdir():
+
+        if not file_path.is_file():
+            continue
+
+        extension = file_path.suffix.lower()
+
+        if (
+            extension in IMAGE_EXTENSIONS
+            or
+            extension in VIDEO_EXTENSIONS
+        ):
+
+            media.append(file_path)
+
+    # Keep filename order
+    media.sort(key=lambda x: x.name.lower())
+
+    return media
 
 
-# =========================
+# ==========================================
 # MAIN
-# =========================
+# ==========================================
 
 def main():
 
     if not ROOT_FOLDER.exists():
+
         print(f"❌ Folder not found: {ROOT_FOLDER}")
+
         return
 
-    print("Scanning folders...")
+    # --------------------------------------
+    # GET ONLY DIRECT SUBFOLDERS
+    # --------------------------------------
 
-    all_media = get_all_media()
+    folders = [
+        folder
+        for folder in ROOT_FOLDER.iterdir()
+        if folder.is_dir()
+    ]
 
-    if not all_media:
-        print("❌ No images/videos found.")
+    folders.sort(key=lambda x: x.name.lower())
+
+    if not folders:
+
+        print("❌ No subfolders found.")
+
         return
 
-    print()
-    print(f"Found {len(all_media)} media files.")
+    print(f"📁 Found {len(folders)} folders")
 
-    print()
-    print("Files found:")
+    print("=" * 60)
 
-    for file_path in all_media:
-        print("  ", file_path)
+    # ======================================
+    # PROCESS EACH FOLDER
+    # ======================================
 
-    print()
-    print("=" * 50)
+    for folder in folders:
 
-    # Telegram allows max 10 items in one media group
-    for start in range(0, len(all_media), BATCH_SIZE):
+        folder_name = folder.name
 
-        batch = all_media[start:start + BATCH_SIZE]
+        media_files = get_folder_media(folder)
 
-        group_number = (start // BATCH_SIZE) + 1
+        if not media_files:
+
+            print()
+            print(f"⚠️ Skipping empty folder: {folder_name}")
+
+            continue
 
         print()
-        print(f"📦 Sending group {group_number}")
-        print(f"   Files: {len(batch)}")
+        print("=" * 60)
+        print(f"📁 FOLDER: {folder_name}")
+        print(f"📦 MEDIA: {len(media_files)}")
 
-        # sendMediaGroup needs at least 2 media
-        if len(batch) >= 2:
+        # ----------------------------------
+        # Split folder into groups of 10
+        # ----------------------------------
 
-            success = send_media_group(batch)
+        for start in range(
+            0,
+            len(media_files),
+            BATCH_SIZE
+        ):
 
-            if not success:
-                print("Stopping because sending failed.")
-                break
+            batch = media_files[
+                start:start + BATCH_SIZE
+            ]
 
-        else:
+            group_number = (
+                start // BATCH_SIZE
+            ) + 1
 
-            print("⚠️ Only 1 file left.")
-            print("Use sendPhoto/sendVideo for a single file.")
+            print()
+            print(
+                f"📦 {folder_name} "
+                f"→ Group {group_number} "
+                f"({len(batch)} files)"
+            )
 
-        # Wait before next group
-        if start + BATCH_SIZE < len(all_media):
+            # --------------------------------
+            # 2+ FILES
+            # --------------------------------
 
-            print(f"Waiting {DELAY_BETWEEN_GROUPS} seconds...")
-            time.sleep(DELAY_BETWEEN_GROUPS)
+            if len(batch) >= 2:
+
+                success = send_media_group(
+                    batch,
+                    folder_name
+                )
+
+                if not success:
+
+                    print(
+                        f"❌ Failed folder: "
+                        f"{folder_name}"
+                    )
+
+                    break
+
+            # --------------------------------
+            # ONLY 1 FILE
+            # --------------------------------
+
+            else:
+
+                send_single_media(
+                    batch[0],
+                    folder_name
+                )
+
+            # Wait before next album
+
+            if start + BATCH_SIZE < len(media_files):
+
+                time.sleep(
+                    DELAY_BETWEEN_GROUPS
+                )
+
+        # ----------------------------------
+        # Folder finished
+        # ----------------------------------
+
+        print()
+        print(
+            f"✅ Finished folder: "
+            f"{folder_name}"
+        )
+
+        time.sleep(
+            DELAY_BETWEEN_FOLDERS
+        )
 
     print()
-    print("=" * 50)
-    print("✅ Finished")
+    print("=" * 60)
+    print("🎉 ALL FOLDERS FINISHED")
+    print("=" * 60)
 
+
+# ==========================================
+# RUN
+# ==========================================
 
 if __name__ == "__main__":
     main()
